@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" data-theme="light" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Strict CSP: only our local files run. Monaco loads from node_modules locally. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self';"
+    />
+    <title>Dreamy Researcher</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- ===== Title / toolbar ===== -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot" aria-hidden="true">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+          </svg>
+        </span>
+        <span class="brand-name">Dreamy&nbsp;Researcher</span>
+      </div>
+
+      <div class="toolbar">
+        <button class="btn" data-action="new" data-i18n="new"></button>
+        <button class="btn" data-action="open" data-i18n="open"></button>
+        <button class="btn" data-action="save" data-i18n="save"></button>
+        <button class="btn" data-action="export" data-i18n="export"></button>
+        <span class="divider"></span>
+        <button class="btn ghost" data-action="add-text" data-i18n="addText"></button>
+        <button class="btn ghost" data-action="add-code" data-i18n="addCode"></button>
+        <button class="btn ghost" data-action="run-all" data-i18n="runAll"></button>
+        <button class="btn ghost" data-action="restart" data-i18n="restart"></button>
+      </div>
+
+      <div class="topbar-right">
+        <select id="lang-select" class="select" aria-label="Language">
+          <option value="en">English</option>
+          <option value="ar">العربية</option>
+          <option value="fr">Français</option>
+        </select>
+        <button class="btn icon" id="theme-toggle" aria-label="Toggle theme">
+          <svg class="icon-svg moon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+          </svg>
+          <svg class="icon-svg sun" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ===== Main layout: sidebar + notebook + results ===== -->
+    <main class="layout">
+      <!-- Researcher sidebar (no coding required) -->
+      <aside class="sidebar" aria-label="Researcher modules">
+        <h2 class="sidebar-title" data-i18n="researcher"></h2>
+
+        <section class="module">
+          <h3 data-i18n="preprocessing"></h3>
+          <label class="check"><input type="checkbox" id="pp-clean" checked /><span data-i18n="clean"></span></label>
+          <label class="check"><input type="checkbox" id="pp-norm" checked /><span data-i18n="normalize"></span></label>
+          <label class="check"><input type="checkbox" id="pp-aug" /><span data-i18n="augment"></span></label>
+          <button class="btn block" data-run="preprocess" data-i18n="runPreprocess"></button>
+        </section>
+
+        <section class="module">
+          <h3 data-i18n="visualization"></h3>
+          <select id="viz-kind" class="select block">
+            <option value="auto" data-i18n="vizAuto"></option>
+            <option value="histograms" data-i18n="vizHist"></option>
+            <option value="correlation" data-i18n="vizCorr"></option>
+            <option value="clustering" data-i18n="vizCluster"></option>
+          </select>
+          <button class="btn block" data-run="visualize" data-i18n="runVisualize"></button>
+        </section>
+
+        <section class="module">
+          <h3 data-i18n="explainability"></h3>
+          <select id="xai-tech" class="select block">
+            <option value="shap">SHAP</option>
+            <option value="lime">LIME</option>
+            <option value="gradcam">Grad-CAM</option>
+          </select>
+          <button class="btn block" data-run="explain" data-i18n="runExplain"></button>
+        </section>
+
+        <section class="module dataset">
+          <h3 data-i18n="dataset"></h3>
+          <p id="dataset-info" class="muted" data-i18n="noDataset"></p>
+          <button class="btn block ghost" data-action="load-data" data-i18n="loadData"></button>
+        </section>
+      </aside>
+
+      <!-- Notebook -->
+      <section class="notebook" id="notebook" aria-label="Notebook"></section>
+
+      <!-- Results panel -->
+      <aside class="results" aria-label="Results">
+        <h2 class="results-title" data-i18n="results"></h2>
+        <div id="results-body" class="results-body">
+          <p class="muted" data-i18n="resultsHint"></p>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status-file" data-i18n="untitled"></span>
+      <span id="status-py" class="status-pill"></span>
+    </footer>
+
+    <!-- Monaco AMD loader from local node_modules -->
+    <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
+    <script src="i18n.js"></script>
+    <script src="renderer.js"></script>
+  </body>
+</html>
