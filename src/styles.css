@@ -122,6 +122,14 @@ body::after {
   -webkit-app-region: drag;
 }
 .topbar button, .topbar select { -webkit-app-region: no-drag; }
+.web-notice {
+  padding: 8px 18px;
+  color: var(--text);
+  background: var(--teal-soft);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.5;
+}
 
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; }
 .brand-dot {

@@ -1,9 +1,10 @@
 {
   "name": "dreamy-researcher",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A lightweight, multilingual mini-VS Code for researchers, students, and coders — with one-click automatic ML researcher modules.",
   "main": "main.js",
   "author": "Dreamy Tech Researcher",
+  "desktopName": "dreamy-researcher",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
@@ -13,14 +14,14 @@
     "dist:linux": "electron-builder --linux AppImage",
     "dist:win": "electron-builder --win nsis",
     "dist:mac": "electron-builder --mac dmg",
-    "postinstall": "python3 -m pip install --user -r python/requirements.txt || echo 'Python deps optional — install manually if needed'"
+    "web": "node web-server.js"
   },
   "dependencies": {
     "monaco-editor": "^0.52.0"
   },
   "devDependencies": {
-    "electron": "^33.0.0",
-    "electron-builder": "^25.1.8"
+    "electron": "^45.5.0",
+    "electron-builder": "^26.18.0"
   },
   "build": {
     "appId": "com.dreamytech.researcher",
@@ -40,16 +41,23 @@
       }
     ],
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "Development",
+      "syncDesktopName": true,
       "icon": "assets/icon.png"
     },
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "assets/icon.png"
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.png"
     }

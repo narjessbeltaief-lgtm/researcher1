@@ -454,7 +454,7 @@ async function exportProcessedDataset() {
 function setDataset(csv, name, path = null) {
   state.dataset.csv = csv
   state.dataset.name = name
-  state.dataset.path = path
+  state.dataset.path = window.api.isWeb ? null : path
   // The version prefix makes an explicit reload reset `df` even when the file
   // content is unchanged; the hash detects actual data changes.
   state.dataset.sig = `${Date.now().toString(36)}-${datasetSignature(csv)}`

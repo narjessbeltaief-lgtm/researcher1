@@ -53,6 +53,7 @@ window.I18N = {
     loaded: "Loaded",
     rows: "rows",
     datasetHint: "In code: df (DataFrame), dataset, dataset_name, dataset_path.",
+    webNotice: "Web version: researcher modules send selected CSVs/images to this service; notebook code runs in your browser."
   },
   ar: {
     _dir: "rtl",
@@ -101,6 +102,7 @@ window.I18N = {
     loaded: "تم التحميل",
     rows: "صفوف",
     datasetHint: "في الكود: df (DataFrame)، dataset، dataset_name، dataset_path.",
+    webNotice: "نسخة الويب: ترسل وحدات البحث ملفات CSV والصور المحددة إلى هذا الخادم؛ ويُنفذ كود الدفتر في متصفحك."
   },
   fr: {
     _dir: "ltr",
@@ -149,5 +151,6 @@ window.I18N = {
     loaded: "Chargé",
     rows: "lignes",
     datasetHint: "Dans le code : df (DataFrame), dataset, dataset_name, dataset_path.",
+    webNotice: "Version web : les modules envoient les CSV/images sélectionnés à ce service ; le code du notebook s’exécute dans votre navigateur."
   },
 }

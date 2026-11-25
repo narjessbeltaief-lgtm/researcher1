@@ -123,40 +123,69 @@ or running **Preprocessing** refreshes `df` with the new data.
 
 ---
 
-## Packaging & publishing
+## Desktop installers & GitHub Releases
 
-Packaging is handled by **electron-builder** (already configured in `package.json`).
+Packaging is handled by **electron-builder**. Build locally on the matching operating
+system (Windows and macOS installers should be built on Windows and macOS respectively):
 
 ```bash
-# Linux  → dist/Dreamy Researcher-1.0.0.AppImage
-npm run dist:linux
-
-# Windows → dist/Dreamy Researcher Setup 1.0.0.exe   (run on/ via Windows)
-npm run dist:win
-
-# macOS   → dist/Dreamy Researcher-1.0.0.dmg          (must build on macOS)
-npm run dist:mac
-
-# All targets for the current OS
-npm run dist
+npm ci
+npm run dist:linux  # AppImage
+npm run dist:win    # Windows NSIS installer
+npm run dist:mac    # macOS DMG
 ```
 
-Outputs land in `dist/`. The `python/` folder is bundled via `extraResources`, so the
-sidecar ships with the app (end users still need Python 3 + the pip packages installed,
-or you can freeze the sidecar with PyInstaller for a fully standalone build).
+Build outputs go to `dist/`. **These installers are not standalone:** they include the
+Python sidecar source, but launch a system Python. Users need Python 3 and the packages
+from `python/requirements.txt` installed. The app does not currently bundle a Python
+runtime or those packages.
 
-### Publish on GitHub
+A GitHub Actions workflow in `.github/workflows/release.yml` builds all three OS targets.
+To publish installers, push a version tag after your changes are on `main`:
+
 ```bash
-git init && git add . && git commit -m "Dreamy Researcher v1.0.0"
-git branch -M main
-git remote add origin https://github.com/<you>/dreamy-researcher.git
-git push -u origin main
-# Then create a GitHub Release and upload the files from dist/
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
-### Optional distribution
-- **Flathub (Linux):** wrap the AppImage in a Flatpak manifest and submit to flathub/flathub.
-- **SourceForge:** create a project and upload the `dist/` artifacts to the Files section.
+The workflow creates a GitHub Release and attaches the installers. Change the version tag
+for each release; the package version in `package.json` should be updated to match.
+
+## Browser version
+
+The web version reuses the app UI and serves researcher modules through a small Node API.
+Notebook code runs in a Pyodide Web Worker **in the visitor's browser**, not on the server.
+The browser runtime supports common notebook packages (NumPy, pandas, matplotlib, and
+scikit-learn); desktop-only packages such as SHAP, LIME, and PyTorch are not available in
+that browser worker. The one-click researcher modules still run on the Python service.
+
+Run the web version locally (Python dependencies are required for the server-side modules):
+
+```bash
+npm ci
+python3 -m pip install -r python/requirements.txt
+npm run web
+```
+
+Open <http://127.0.0.1:8080>. The browser loads Pyodide from jsDelivr. Selected CSVs
+and images are sent to the web service when a researcher module runs; notebook code stays
+in the browser. CSV requests are limited to 5 MB, images to 20 MB, module requests to 20
+per IP per minute, and the service processes one module request at a time.
+
+### Docker deployment
+
+A Dockerfile is included for a hosted web service:
+
+```bash
+docker build -t dreamy-researcher-web .
+docker run --rm -p 8080:8080 dreamy-researcher-web
+```
+
+Deploy the container behind HTTPS on a host that supports Docker. The container includes
+the Python dependencies and uses CPU-only PyTorch for Grad-CAM. Public deployments have
+no account system yet; do not use them for confidential datasets. Keep the host's request
+limits and resource limits enabled, and only set `TRUST_PROXY=1` when the trusted hosting
+proxy sanitizes `X-Forwarded-For`.
 
 ---
 

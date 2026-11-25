@@ -10,6 +10,13 @@ __v0_jsx-dev-runtime.ts
 .env*.local
 
 # Common ignores
-node_modules
+node_modules/
 .next/
 .DS_Store
+
+# Build and local Python environments
+dist/
+build/
+.venv/
+__pycache__/
+*.py[cod]
