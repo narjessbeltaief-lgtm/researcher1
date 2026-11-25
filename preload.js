@@ -11,6 +11,7 @@ const { contextBridge, ipcRenderer } = require("electron")
 contextBridge.exposeInMainWorld("api", {
   // ---- File management ----
   openFile: () => ipcRenderer.invoke("file:open"),
+  openImage: () => ipcRenderer.invoke("file:open-image"),
   saveFile: (payload) => ipcRenderer.invoke("file:save", payload),
   exportFile: (payload) => ipcRenderer.invoke("file:export", payload),
   readFile: (filePath) => ipcRenderer.invoke("file:read", filePath),
@@ -29,8 +30,6 @@ contextBridge.exposeInMainWorld("api", {
       "menu:toggle-theme",
       "menu:lang",
       "menu:run",
-      "menu:run-all",
-      "menu:restart",
     ]
     const listeners = channels.map((ch) => {
       const fn = (_e, payload) => handler(ch, payload)

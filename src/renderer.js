@@ -7,8 +7,9 @@ const state = {
   lang: "en",
   theme: "dark",
   filePath: null,
+  fileType: null,
   cells: [], // { id, type: 'text'|'code', editor?, el, getValue() }
-  dataset: { csv: null, name: null, rows: 0, image: null },
+  dataset: { csv: null, name: null, path: null, sig: null, rows: 0, image: null, imageName: null },
   monacoReady: false,
 }
 
@@ -22,8 +23,8 @@ require(["vs/editor/editor.main"], () => {
   defineMonacoThemes()
   state.monacoReady = true
   // Seed the notebook with a welcome text cell + a code cell.
-  addCell("text", "# Welcome to Dreamy Researcher\nUse the **Researcher** panel on the left — no coding required.\nOr write Python below and press **Shift+Enter** to run it.")
-  addCell("code", 'print("hello world")\n\n# Variables persist between cells, just like Colab.\nx = 21\nx * 2')
+  addCell("text", "# Welcome to Dreamy Researcher\nUse the **Researcher** panel on the left — no coding required.")
+  addCell("code", "# Python scratch cell\nprint('Hello, researcher!')")
 })
 
 function defineMonacoThemes() {
@@ -74,44 +75,24 @@ function addCell(type, initial = "") {
   head.innerHTML = `
     <span class="cell-tag">${type === "code" ? "CODE" : "TEXT"}</span>
     <span class="spacer"></span>
-    ${type === "code" ? `<button class="cell-mini run" data-cell-run>▶ ${t("runCell")}</button>` : ""}
+    ${type === "code" ? `<button class="cell-mini" data-cell-run>${t("runCell")}</button>` : ""}
     <button class="cell-mini" data-cell-del>${t("deleteCell")}</button>
   `
   el.appendChild(head)
 
   let cell
   if (type === "code") {
-    // A horizontal row: [In [n]] gutter + editor.
-    const codeRow = document.createElement("div")
-    codeRow.className = "code-row"
-
-    const gutter = document.createElement("div")
-    gutter.className = "run-gutter"
-    const runLabel = document.createElement("span")
-    runLabel.className = "run-count"
-    runLabel.textContent = "[ ]"
-    gutter.appendChild(runLabel)
-    codeRow.appendChild(gutter)
-
     const editorHost = document.createElement("div")
     editorHost.className = "cell-editor"
-    editorHost.style.height = "120px"
-    codeRow.appendChild(editorHost)
-    el.appendChild(codeRow)
+    el.appendChild(editorHost)
 
-    // Output block with a copy button (hidden until the cell runs).
-    const outputWrap = document.createElement("div")
-    outputWrap.className = "cell-output-wrap"
-    outputWrap.hidden = true
-    const copyBtn = document.createElement("button")
-    copyBtn.className = "copy-btn"
-    copyBtn.textContent = t("copy")
-    copyBtn.hidden = true
     const output = document.createElement("pre")
     output.className = "cell-output"
-    outputWrap.appendChild(copyBtn)
-    outputWrap.appendChild(output)
-    el.appendChild(outputWrap)
+    el.appendChild(output)
+
+    const media = document.createElement("div")
+    media.className = "cell-media"
+    el.appendChild(media)
 
     const editor = monaco.editor.create(editorHost, {
       value: initial,
@@ -122,25 +103,24 @@ function addCell(type, initial = "") {
       fontFamily: "var(--font-mono)",
       automaticLayout: true,
       scrollBeyondLastLine: false,
-      lineNumbers: "off",
+      scrollbar: { vertical: "auto", horizontal: "auto" },
       padding: { top: 10, bottom: 10 },
     })
 
-    cell = { id, type, el, editor, output, outputWrap, copyBtn, runLabel, getValue: () => editor.getValue() }
+    // Keep short cells fully visible instead of forcing users to scroll
+    // inside the editor to see the beginning of their code.
+    const resizeEditor = () => {
+      const contentHeight = editor.getContentHeight()
+      // Grow with the code, but cap very long cells so one cell cannot make the
+      // whole notebook enormous — they scroll inside the editor instead.
+      const height = Math.min(560, Math.max(80, contentHeight))
+      editorHost.style.height = `${height}px`
+      editor.layout({ width: editorHost.clientWidth, height })
+    }
+    editor.onDidContentSizeChange(resizeEditor)
+    requestAnimationFrame(resizeEditor)
 
-    // Colab-style: Shift+Enter / Ctrl+Enter runs the cell.
-    editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => runCodeCell(cell))
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runCodeCell(cell))
-
-    copyBtn.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(output.textContent)
-        copyBtn.textContent = t("copied")
-        setTimeout(() => (copyBtn.textContent = t("copy")), 1200)
-      } catch {
-        /* clipboard unavailable */
-      }
-    })
+    cell = { id, type, el, editor, output, media, getValue: () => editor.getValue() }
   } else {
     const text = document.createElement("div")
     text.className = "cell-text"
@@ -169,60 +149,64 @@ function removeCell(id) {
   state.cells.splice(idx, 1)
 }
 
-/**
- * Run a code cell by sending its Python source to the persistent kernel in the
- * Python sidecar (just like Colab). State persists across cells. We capture
- * stdout + the value of the final expression and render it as copyable output.
- */
+/** Show plots returned by the Python sidecar under a code cell. */
+function renderCellImages(cell, images) {
+  if (!cell.media) return
+  cell.media.innerHTML = ""
+  for (const src of images || []) {
+    const img = document.createElement("img")
+    img.src = src
+    img.alt = t("image")
+    img.loading = "lazy"
+    cell.media.appendChild(img)
+  }
+}
+
+/** Fast, deterministic fingerprint so Python can detect dataset changes. */
+function datasetSignature(csv) {
+  let hash = 2166136261
+  for (let i = 0; i < csv.length; i++) {
+    hash ^= csv.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `${(hash >>> 0).toString(16)}-${csv.length}`
+}
+
+/** Descriptor sent with every cell run; Python installs it as `df`. */
+function datasetContext() {
+  const ds = state.dataset
+  if (!ds.csv) return null
+  const ctx = { name: ds.name, sig: ds.sig }
+  // Prefer the real path (Python reads the file once). After preprocessing the
+  // cleaned CSV only exists in memory, so send its text instead.
+  if (ds.path) ctx.path = ds.path
+  else ctx.csv = ds.csv
+  return ctx
+}
+
+/** Run a Python code cell in the persistent researcher sidecar. */
 async function runCodeCell(cell) {
   const code = cell.getValue()
-  cell.outputWrap.hidden = false
   cell.output.textContent = ""
-  cell.runLabel.textContent = "[*]"
+  renderCellImages(cell, [])
   cell.output.innerHTML = `<span class="spinner"></span> ${t("running")}`
-  cell.copyBtn.hidden = true
   try {
-    const res = await window.api.runResearch("execute", { code })
-    let text = res.stdout || ""
-    if (res.value !== null && res.value !== undefined) {
-      text += (text && !text.endsWith("\n") ? "\n" : "") + res.value
-    }
-    if (!text) text = "(no output)"
-    cell.output.textContent = text
-    cell.output.classList.toggle("err", !res.ok)
-    cell.runLabel.textContent = `[${res.count}]`
-    cell.copyBtn.hidden = false
+    const result = await window.api.runResearch("execute_code", { code, dataset: datasetContext() })
+    const images = result.images || []
+    // Don't show "(no output)" when the cell produced a plot instead.
+    cell.output.textContent = result.output === "(no output)" && images.length ? "" : result.output || "(no output)"
+    renderCellImages(cell, images)
+    cell.output.scrollIntoView({ behavior: "smooth", block: "nearest" })
   } catch (err) {
-    cell.output.textContent = "⚠ " + err.message
-    cell.output.classList.add("err")
-    cell.runLabel.textContent = "[!]"
+    cell.output.textContent = "⚠ " + friendlyError(err)
+    cell.output.scrollIntoView({ behavior: "smooth", block: "nearest" })
   }
 }
 
-/** Run every code cell from top to bottom (Colab "Run all"). */
-async function runAllCells() {
-  for (const cell of state.cells) {
-    if (cell.type === "code") {
-      // eslint-disable-next-line no-await-in-loop
-      await runCodeCell(cell)
-    }
-  }
-}
-
-/** Restart the Python kernel: wipe all variables defined in code cells. */
-async function restartKernel() {
-  try {
-    await window.api.runResearch("reset_kernel", {})
-    state.cells.forEach((c) => {
-      if (c.type === "code") {
-        c.runLabel.textContent = "[ ]"
-        c.outputWrap.hidden = true
-        c.output.textContent = ""
-      }
-    })
-  } catch {
-    /* sidecar offline — nothing to reset */
-  }
+/** Execute every code cell in document order, preserving Python state between cells. */
+async function runAllCodeCells() {
+  const codeCells = state.cells.filter((cell) => cell.type === "code")
+  for (const cell of codeCells) await runCodeCell(cell)
 }
 
 /* ----------------------------------------------------------------------- *
@@ -238,17 +222,33 @@ function appendResult(html) {
 }
 
 async function runModule(method) {
-  if (method !== "explain-gradcam" && method !== "explain" && !state.dataset.csv && method !== "explainImg") {
+  const isExplain = method === "explain"
+  const technique = isExplain ? document.getElementById("xai-tech").value : null
+
+  // Each module has different input requirements.
+  if (method === "preprocess" || method === "visualize") {
     if (!state.dataset.csv) {
       setResults(`<p class="muted">${t("noDataset")} ${t("loadData")}</p>`)
       return
     }
+  } else if (isExplain) {
+    if (technique === "gradcam") {
+      if (!state.dataset.image) {
+        setResults(
+          `<div class="results-card"><h4>${t("explainability")}</h4><p>${t("gradcamNeedsImage")}</p></div>`,
+        )
+        return
+      }
+    } else if (!state.dataset.csv) {
+      setResults(`<p class="muted">${t("noDataset")} ${t("loadData")}</p>`)
+      return
+    }
   }
+
   setResults(`<p><span class="spinner"></span> ${t("running")}</p>`)
 
   try {
     let params = { csv: state.dataset.csv }
-    let rpc = method
 
     if (method === "preprocess") {
       params.clean = document.getElementById("pp-clean").checked
@@ -256,26 +256,34 @@ async function runModule(method) {
       params.augment = document.getElementById("pp-aug").checked
     } else if (method === "visualize") {
       params.kind = document.getElementById("viz-kind").value
-    } else if (method === "explain") {
-      const tech = document.getElementById("xai-tech").value
-      params.technique = tech
-      if (tech === "gradcam") {
-        params = { technique: "gradcam", image: state.dataset.image }
-      }
+    } else if (isExplain) {
+      // Grad-CAM needs an image, SHAP/LIME need the tabular dataset.
+      params =
+        technique === "gradcam"
+          ? { technique: "gradcam", image: state.dataset.image }
+          : { csv: state.dataset.csv, technique }
     }
 
-    const res = await window.api.runResearch(rpc, params)
+    const res = await window.api.runResearch(method, params)
     renderModuleResult(method, res)
   } catch (err) {
-    setResults(`<div class="results-card"><h4>⚠ Error</h4><p>${escapeHtml(err.message)}</p></div>`)
+    setResults(
+      `<div class="results-card"><h4>⚠ ${t("error")}</h4><p>${escapeHtml(friendlyError(err))}</p></div>`,
+    )
   }
+}
+
+/** Strip Electron's IPC wrapper so users see the actual Python error. */
+function friendlyError(err) {
+  const message = String(err && err.message ? err.message : err)
+  return message.replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, "")
 }
 
 function renderModuleResult(method, res) {
   if (method === "preprocess") {
     // Replace working dataset with the cleaned one so the next module benefits.
     if (res.csv) {
-      state.dataset.csv = res.csv
+      setDataset(res.csv, state.dataset.name, null)
       state.dataset.rows = res.summary.rows_after
       updateDatasetInfo()
     }
@@ -290,6 +298,7 @@ function renderModuleResult(method, res) {
         <p class="muted">${res.summary.rows_before}×${res.summary.cols_before} →
            <strong>${res.summary.rows_after}×${res.summary.cols_after}</strong></p>
         <ul>${stepList}</ul>
+        <button class="btn" data-action="save-dataset">${t("saveData")}</button>
       </div>
       <div class="results-card">
         <h4>Preview</h4>
@@ -323,41 +332,88 @@ function renderModuleResult(method, res) {
  *  File management
  * ----------------------------------------------------------------------- */
 function serializeNotebook() {
+  if (state.fileType === "py") {
+    return state.cells.filter((c) => c.type === "code").map((c) => c.getValue()).join("\n\n")
+  }
+  if (state.fileType === "ipynb") {
+    return JSON.stringify({
+      cells: state.cells.map((c) => ({
+        cell_type: c.type === "text" ? "markdown" : "code",
+        metadata: {},
+        source: c.getValue().split("\n").map((line, index, lines) => line + (index < lines.length - 1 ? "\n" : "")),
+        ...(c.type === "code" ? { outputs: [], execution_count: null } : {}),
+      })),
+      metadata: { kernelspec: { display_name: "Python 3", language: "python", name: "python3" }, language_info: { name: "python" } },
+      nbformat: 4,
+      nbformat_minor: 5,
+    }, null, 2)
+  }
   return JSON.stringify(
-    {
-      version: 1,
-      lang: state.lang,
-      cells: state.cells.map((c) => ({ type: c.type, value: c.getValue() })),
-    },
+    { version: 1, lang: state.lang, cells: state.cells.map((c) => ({ type: c.type, value: c.getValue() })) },
     null,
     2,
   )
 }
 
-function loadNotebook(json) {
+function loadNotebook(content, filePath = "") {
+  const extension = filePath.split(".").pop().toLowerCase()
+  state.fileType = extension
+  state.cells.slice().forEach((c) => removeCell(c.id))
+
+  // A Python source file is shown as one editable, runnable code cell.
+  if (extension === "py") {
+    addCell("code", content)
+    return
+  }
+
   try {
-    const data = JSON.parse(json)
-    state.cells.slice().forEach((c) => removeCell(c.id))
-    ;(data.cells || []).forEach((c) => addCell(c.type, c.value))
+    const data = JSON.parse(content)
+    // Jupyter notebooks store source as arrays of lines and distinguish
+    // markdown from executable code. Convert them to Dreamy cells.
+    if (extension === "ipynb" || Array.isArray(data.cells) && data.nbformat) {
+      ;(data.cells || []).forEach((c) => {
+        const source = Array.isArray(c.source) ? c.source.join("") : String(c.source || "")
+        addCell(c.cell_type === "markdown" ? "text" : "code", source)
+      })
+      if (!data.cells || data.cells.length === 0) addCell("code", "")
+      return
+    }
+    // Dreamy's own .dnb format.
+    if (Array.isArray(data.cells)) {
+      data.cells.forEach((c) => addCell(c.type === "text" ? "text" : "code", c.value || ""))
+      return
+    }
+    addCell("code", content)
   } catch {
-    // If it isn't a notebook, treat content as a single code cell.
-    addCell("code", json)
+    // Plain text and other source files are treated as one runnable cell.
+    addCell("code", content)
   }
 }
 
 async function doNew() {
   state.cells.slice().forEach((c) => removeCell(c.id))
   state.filePath = null
+  state.fileType = "dnb"
   setStatusFile()
   addCell("text", "# New notebook")
 }
 
-async function doOpen() {
-  const res = await window.api.openFile()
+/** Route a file chosen from the toolbar: CSVs become the dataset, others a notebook. */
+function handleOpenedFile(res) {
   if (!res) return
+  const name = res.filePath.split(/[/\\]/).pop()
+  if (name.toLowerCase().endsWith(".csv")) {
+    setDataset(res.content, name, res.filePath)
+    showDatasetLoaded()
+    return
+  }
   state.filePath = res.filePath
-  loadNotebook(res.content)
+  loadNotebook(res.content, res.filePath)
   setStatusFile()
+}
+
+async function doOpen() {
+  handleOpenedFile(await window.api.openFile())
 }
 
 async function doSave() {
@@ -383,26 +439,101 @@ pre{background:#fbf9f4;border:1px solid #e0d8c8;padding:12px;border-radius:10px;
   await window.api.exportFile({ content: html, defaultName: "notebook.html" })
 }
 
-async function loadDataset() {
-  const res = await window.api.openFile()
-  if (!res) return
-  state.dataset.name = res.filePath.split(/[/\\]/).pop()
-  if (state.dataset.name.toLowerCase().endsWith(".csv")) {
-    state.dataset.csv = res.content
-    state.dataset.rows = res.content.trim().split("\n").length - 1
-  } else {
-    // image (read as base64) for Grad-CAM — main returns text, so we wrap data URI
-    state.dataset.image = res.content
-  }
+async function exportProcessedDataset() {
+  if (!state.dataset.csv) return
+
+  const originalName = state.dataset.name || "dataset.csv"
+  const baseName = originalName.replace(/\.csv$/i, "")
+  await window.api.exportFile({
+    content: state.dataset.csv,
+    defaultName: `${baseName}-processed.csv`,
+  })
+}
+
+/** Store the selected CSV and expose it to notebook code as `df`. */
+function setDataset(csv, name, path = null) {
+  state.dataset.csv = csv
+  state.dataset.name = name
+  state.dataset.path = path
+  // The version prefix makes an explicit reload reset `df` even when the file
+  // content is unchanged; the hash detects actual data changes.
+  state.dataset.sig = `${Date.now().toString(36)}-${datasetSignature(csv)}`
+  state.dataset.rows = csv.trim() ? csv.trim().split("\n").length - 1 : 0
   updateDatasetInfo()
+}
+
+function showDatasetLoaded() {
+  setResults(
+    `<div class="results-card">
+      <h4>${t("dataset")}</h4>
+      <p>${t("loaded")}: ${escapeHtml(state.dataset.name)} — ${state.dataset.rows} ${t("rows")}</p>
+      ${state.dataset.path ? `<p class="muted" style="word-break:break-all">${escapeHtml(state.dataset.path)}</p>` : ""}
+      <p class="muted">${t("datasetHint")}</p>
+    </div>`,
+  )
+}
+
+async function loadDataset() {
+  try {
+    const res = await window.api.openFile()
+    if (!res) return
+    const name = res.filePath.split(/[/\\]/).pop()
+
+    // This loader is only for tabular data. Images belong to Grad-CAM.
+    if (!name.toLowerCase().endsWith(".csv")) {
+      setResults(
+        `<div class="results-card"><h4>${t("dataset")}</h4><p>${t("notCsv")}</p></div>`,
+      )
+      return
+    }
+
+    setDataset(res.content, name, res.filePath)
+    showDatasetLoaded()
+  } catch (err) {
+    setResults(
+      `<div class="results-card"><h4>⚠ ${t("error")}</h4><p>${escapeHtml(friendlyError(err))}</p></div>`,
+    )
+  }
+}
+
+/** Load a PNG/JPG for Grad-CAM. The image is sent as a data URI, not text. */
+async function loadExplainImage() {
+  try {
+    const res = await window.api.openImage()
+    if (!res) return
+    state.dataset.image = res.dataUri
+    state.dataset.imageName = res.name
+    document.getElementById("xai-tech").value = "gradcam"
+    updateDatasetInfo()
+    setResults(
+      `<div class="results-card"><h4>${t("image")}</h4><img alt="${escapeHtml(res.name)}" src="${res.dataUri}" /><p>${t("loaded")}: ${escapeHtml(res.name)}</p><p class="muted">${t("imageReady")}</p></div>`,
+    )
+  } catch (err) {
+    setResults(
+      `<div class="results-card"><h4>⚠ ${t("error")}</h4><p>${escapeHtml(friendlyError(err))}</p></div>`,
+    )
+  }
 }
 
 function updateDatasetInfo() {
   const el = document.getElementById("dataset-info")
+  const hint = document.getElementById("dataset-hint")
+  const saveButton = document.getElementById("save-dataset")
   if (state.dataset.csv) {
     el.textContent = `${t("loaded")}: ${state.dataset.name} — ${state.dataset.rows} ${t("rows")}`
+    if (saveButton) saveButton.disabled = false
+    if (hint) hint.hidden = false
   } else {
     el.textContent = t("noDataset")
+    if (saveButton) saveButton.disabled = true
+    if (hint) hint.hidden = true
+  }
+
+  const imageEl = document.getElementById("image-info")
+  if (imageEl) {
+    imageEl.textContent = state.dataset.image
+      ? `${t("loaded")}: ${state.dataset.imageName}`
+      : t("noImage")
   }
 }
 
@@ -475,11 +606,12 @@ document.addEventListener("click", (e) => {
     else if (a === "open") doOpen()
     else if (a === "save") doSave()
     else if (a === "export") doExport()
+    else if (a === "export-dataset" || a === "save-dataset") exportProcessedDataset()
     else if (a === "add-text") addCell("text", "")
     else if (a === "add-code") addCell("code", "")
-    else if (a === "run-all") runAllCells()
-    else if (a === "restart") restartKernel()
+    else if (a === "run-all") runAllCodeCells()
     else if (a === "load-data") loadDataset()
+    else if (a === "load-image") loadExplainImage()
     return
   }
   const runEl = e.target.closest("[data-run]")
@@ -488,6 +620,34 @@ document.addEventListener("click", (e) => {
 
 document.getElementById("lang-select").addEventListener("change", (e) => applyLanguage(e.target.value))
 document.getElementById("theme-toggle").addEventListener("click", toggleTheme)
+
+// Drag the divider to resize the results panel without changing the app window.
+const layoutEl = document.querySelector(".layout")
+const splitterEl = document.getElementById("results-splitter")
+let resizingResults = false
+splitterEl.addEventListener("pointerdown", (event) => {
+  resizingResults = true
+  splitterEl.setPointerCapture(event.pointerId)
+  splitterEl.classList.add("active")
+})
+splitterEl.addEventListener("pointermove", (event) => {
+  if (!resizingResults) return
+  const rect = layoutEl.getBoundingClientRect()
+  const width = Math.max(260, Math.min(620, rect.right - event.clientX))
+  layoutEl.style.gridTemplateColumns = `264px minmax(280px, 1fr) 8px ${width}px`
+})
+const stopResizing = () => {
+  resizingResults = false
+  splitterEl.classList.remove("active")
+}
+splitterEl.addEventListener("pointerup", stopResizing)
+splitterEl.addEventListener("pointercancel", stopResizing)
+splitterEl.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+  const current = parseInt(getComputedStyle(layoutEl).gridTemplateColumns.split(" ").pop(), 10)
+  const next = current + (event.key === "ArrowLeft" ? 20 : -20)
+  layoutEl.style.gridTemplateColumns = `264px minmax(280px, 1fr) 8px ${Math.max(260, Math.min(620, next))}px`
+})
 
 // Native menu events forwarded from main.js
 window.api.onMenu((channel, payload) => {
@@ -499,8 +659,6 @@ window.api.onMenu((channel, payload) => {
     case "menu:toggle-theme": toggleTheme(); break
     case "menu:lang": applyLanguage(payload); break
     case "menu:run": runModule(payload); break
-    case "menu:run-all": runAllCells(); break
-    case "menu:restart": restartKernel(); break
   }
 })
 

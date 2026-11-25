@@ -34,7 +34,10 @@ dreamy-researcher/
 ├── assets/
 │   └── icon.png          # app icon
 ├── samples/
-│   └── iris-sample.csv   # demo dataset to try the modules
+│   ├── iris-sample.csv       # demo dataset to try the modules
+│   ├── study-scores.csv      # 120-row classification demo
+│   ├── example-notebook.ipynb # code-cell walkthrough (Jupyter format)
+│   └── example-notebook.dnb  # same walkthrough in Dreamy's native format
 ├── python/
 │   ├── server.py         # the "Automatic Researcher" sidecar (JSON over stdio)
 │   └── requirements.txt  # pandas, scikit-learn, shap, lime, torch…
@@ -77,7 +80,7 @@ npm install
 # 4. Install the Python ML stack for the researcher modules
 python3 -m pip install --user -r python/requirements.txt
 #   torch/torchvision are large — skip them if you don't need Grad-CAM:
-#   python3 -m pip install --user pandas numpy scikit-learn matplotlib shap lime
+#   python3 -m pip install --user pandas numpy scikit-learn matplotlib seaborn shap lime
 
 # 5. Run the app
 npm start
@@ -88,9 +91,32 @@ npm run dev
 **Recommended VS Code extensions:** ESLint, Python, Prettier.
 
 ### First run
-1. Click **Load CSV…** in the left sidebar and pick `samples/iris-sample.csv`.
-2. Hit **Run preprocessing**, then **Visualize**, then **Explain** (SHAP).
-3. Switch language from the top-right dropdown; toggle the theme with the moon/sun button.
+1. Click **Load CSV…** in the left sidebar and pick `samples/iris-sample.csv` (or `samples/study-scores.csv`).
+2. Hit **Run preprocessing**, then **Visualize**, then **Explain** (SHAP or LIME). For Grad-CAM, use **Load image…** in the Explainability panel.
+3. Open `samples/example-notebook.ipynb` (or `samples/example-notebook.dnb`) and press **Run all** to test code cells end to end.
+4. Switch language from the top-right dropdown; toggle the theme with the moon/sun button.
+
+### Use the selected dataset in code cells
+
+After **Load CSV…** (or opening a `.csv` with **Open**), the dataset is available
+to every code cell:
+
+```python
+df.head()
+df["score"].mean()
+df.groupby("passed").size()
+```
+
+The notebook namespace also contains:
+
+| Name | Meaning |
+|---|---|
+| `df` / `dataset` | The selected dataset as a pandas DataFrame |
+| `dataset_name` | Original CSV file name |
+| `dataset_path` | Absolute file path, or `None` after preprocessing |
+
+If you modify `df` in one cell, later cells see your changes. Loading a new CSV
+or running **Preprocessing** refreshes `df` with the new data.
 
 > If the status bar shows **"Python: offline"**, Python 3 isn't on your PATH or the
 > requirements aren't installed — the editor still works, only the ML buttons need it.

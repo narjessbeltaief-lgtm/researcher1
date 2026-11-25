@@ -22,81 +22,9 @@ import json
 import io
 import base64
 import traceback
+import ast
 import contextlib
-
-
-# --------------------------------------------------------------------------- #
-#  0. CODE EXECUTION  — a tiny persistent "kernel" (Colab-style)
-# --------------------------------------------------------------------------- #
-
-# A single namespace shared across every code cell, so variables, imports and
-# functions defined in one cell stay available in the next one (just like a
-# Jupyter / Colab kernel). Reset with the "reset_kernel" method.
-KERNEL_GLOBALS = {"__name__": "__main__"}
-_EXEC_COUNT = {"n": 0}
-
-
-def execute(params):
-    """
-    Run Python source from a code cell and capture everything it prints.
-
-    Returns stdout/stderr text plus the repr of the final expression (so a cell
-    ending in `2 + 2` shows `4`, like a notebook). State persists between calls.
-    """
-    code = params.get("code", "")
-    if not code.strip():
-        return {"count": _EXEC_COUNT["n"], "stdout": "", "value": None, "ok": True}
-
-    _EXEC_COUNT["n"] += 1
-    out = io.StringIO()
-    value_repr = None
-    ok = True
-
-    # If the last line is a bare expression, evaluate it separately so we can
-    # echo its value the way notebooks do.
-    import ast
-
-    body = code
-    tail_expr = None
-    try:
-        parsed = ast.parse(code, mode="exec")
-        if parsed.body and isinstance(parsed.body[-1], ast.Expr):
-            tail = parsed.body.pop()
-            body = ast.unparse(parsed) if hasattr(ast, "unparse") else code
-            tail_expr = ast.get_source_segment(code, tail.value) or None
-            if tail_expr is None:
-                tail_expr = None
-                body = code
-    except SyntaxError:
-        # Let the real exec below raise a clean error message.
-        body, tail_expr = code, None
-
-    try:
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            if body.strip():
-                exec(compile(body, "<cell>", "exec"), KERNEL_GLOBALS)
-            if tail_expr:
-                result = eval(compile(tail_expr, "<cell>", "eval"), KERNEL_GLOBALS)
-                if result is not None:
-                    value_repr = repr(result)
-    except Exception:
-        ok = False
-        out.write(traceback.format_exc())
-
-    return {
-        "count": _EXEC_COUNT["n"],
-        "stdout": out.getvalue(),
-        "value": value_repr,
-        "ok": ok,
-    }
-
-
-def reset_kernel(params):
-    """Clear all variables defined in code cells."""
-    KERNEL_GLOBALS.clear()
-    KERNEL_GLOBALS["__name__"] = "__main__"
-    _EXEC_COUNT["n"] = 0
-    return {"ok": True}
+import warnings
 
 
 # --------------------------------------------------------------------------- #
@@ -115,6 +43,42 @@ def _fig_to_base64(fig):
     return "data:image/png;base64," + base64.b64encode(buf.read()).decode("ascii")
 
 
+def _prepare_matplotlib():
+    """Use a headless backend and keep figures open so code cells can capture them."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        if not getattr(plt.show, "_dreamy_noop", False):
+            def _show(*args, **kwargs):
+                return None
+
+            _show._dreamy_noop = True
+            plt.show = _show
+    except Exception:
+        # Matplotlib is optional; a missing install should not break text cells.
+        pass
+
+
+def _collect_figures():
+    """Render every open matplotlib figure to a data URI and close it."""
+    if "matplotlib.pyplot" not in sys.modules:
+        return []
+    try:
+        import matplotlib.pyplot as plt
+        images = []
+        for num in list(plt.get_fignums()):
+            try:
+                images.append(_fig_to_base64(plt.figure(num)))
+            except Exception:
+                continue
+        plt.close("all")
+        return images
+    except Exception:
+        return []
+
+
 def _load_df(params):
     """Load a pandas DataFrame from either inline CSV text or a file path."""
     import pandas as pd
@@ -126,7 +90,93 @@ def _load_df(params):
 
 
 # --------------------------------------------------------------------------- #
-#  1. PREPROCESSING  — clean, normalize, augment
+#  1. PYTHON NOTEBOOK CELLS
+# --------------------------------------------------------------------------- #
+
+# Keep a small, persistent namespace so variables can be reused between cells.
+_CELL_GLOBALS = {"__name__": "__dreamy_notebook__"}
+
+
+def _install_dataset(params):
+    """Expose the CSV selected in the UI to notebook code as a DataFrame.
+
+    The renderer sends a descriptor with each execute_code call:
+
+        {"name": "iris.csv", "sig": "...", "path": "/home/me/iris.csv"}
+        {"name": "iris.csv", "sig": "...", "csv": "sepal_length,..."}
+
+    The signature lets us skip reinstalling an unchanged dataset, so variables
+    the user changed in a previous cell (for example a filtered ``df``) are
+    preserved. When the sidecar restarts, the next cell call reinstalls it.
+    """
+    dataset = params.get("dataset") or {}
+    sig = dataset.get("sig")
+    if not sig or _CELL_GLOBALS.get("__dreamy_dataset_sig__") == sig:
+        return
+
+    csv_text = dataset.get("csv")
+    path = dataset.get("path")
+    if not csv_text and not path:
+        return
+
+    import pandas as pd
+    frame = pd.read_csv(io.StringIO(csv_text)) if csv_text else pd.read_csv(path)
+    _CELL_GLOBALS["df"] = frame
+    _CELL_GLOBALS["dataset"] = frame
+    _CELL_GLOBALS["dataset_name"] = dataset.get("name") or "dataset.csv"
+    _CELL_GLOBALS["dataset_path"] = path
+    _CELL_GLOBALS["__dreamy_dataset_sig__"] = sig
+
+
+def execute_code(params):
+    """Execute a notebook cell and return captured stdout plus its final value."""
+    code = str(params.get("code", ""))
+    if not code.strip():
+        return {"output": "(no output)", "images": []}
+
+    # Make plt.show() a no-op before the cell runs, so figures stay open for
+    # _collect_figures() instead of warning about the non-interactive backend.
+    _prepare_matplotlib()
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    result = None
+    try:
+        _install_dataset(params)
+        tree = ast.parse(code, mode="exec")
+        # Display the value of the final expression, like a small notebook does.
+        if tree.body and isinstance(tree.body[-1], ast.Expr):
+            last = tree.body.pop()
+            compiled = compile(ast.Module(body=tree.body, type_ignores=[]), "<cell>", "exec")
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exec(compiled, _CELL_GLOBALS, _CELL_GLOBALS)
+                result = eval(compile(ast.Expression(last.value), "<cell>", "eval"), _CELL_GLOBALS, _CELL_GLOBALS)
+        else:
+            compiled = compile(tree, "<cell>", "exec")
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exec(compiled, _CELL_GLOBALS, _CELL_GLOBALS)
+    except Exception:
+        traceback.print_exc(file=stderr)
+
+    output = stdout.getvalue()
+    errors = stderr.getvalue()
+    if result is not None:
+        if output and not output.endswith("\n"):
+            output += "\n"
+        output += repr(result)
+    if errors:
+        if output and not output.endswith("\n"):
+            output += "\n"
+        output += errors
+
+    # Anything the cell plotted (plt.plot, df.plot, plt.show, ...) is rendered
+    # to PNG data URIs and shown under the cell.
+    images = _collect_figures()
+    return {"output": output.rstrip() or "(no output)", "images": images}
+
+
+# --------------------------------------------------------------------------- #
+#  2. PREPROCESSING  — clean, normalize, augment
 # --------------------------------------------------------------------------- #
 
 def preprocess(params):
@@ -272,6 +322,7 @@ def _train_quick_model(df, target):
 
 
 def _explain_shap(params):
+    import numpy as np
     import shap
     import matplotlib
     matplotlib.use("Agg")
@@ -279,24 +330,52 @@ def _explain_shap(params):
 
     df = _load_df(params)
     target = params.get("target") or df.columns[-1]
-    model, X, _ = _train_quick_model(df, target)
+    model, X, is_class = _train_quick_model(df, target)
 
     explainer = shap.TreeExplainer(model)
     sample = X.sample(min(100, len(X)), random_state=42)
-    shap_values = explainer.shap_values(sample)
-    vals = shap_values[1] if isinstance(shap_values, list) else shap_values
+    raw_values = explainer.shap_values(sample)
+
+    # SHAP output shape depends on the model and shap version:
+    #   regression:     (samples, features)
+    #   classification: (samples, features, classes) or a list of 2D arrays.
+    # Normalize everything to (samples, features, classes) so the rest of
+    # this function works for binary, multiclass, and regression models.
+    if isinstance(raw_values, list):
+        values = np.stack([np.asarray(v) for v in raw_values], axis=-1)
+    else:
+        values = np.asarray(raw_values)
+    if values.ndim == 2:
+        values = values[:, :, None]
+    if values.ndim != 3:
+        raise ValueError(f"Unexpected SHAP output shape: {values.shape}")
+
+    if values.shape[2] > 1:
+        # Plot the class with the strongest overall signal.
+        class_idx = int(np.argmax(np.abs(values).mean(axis=(0, 1))))
+        plot_values = values[:, :, class_idx]
+        class_label = class_idx
+        if is_class:
+            try:
+                class_label = df[target].astype("category").cat.categories[class_idx]
+            except Exception:
+                pass
+        class_note = f" (most influential class: {class_label})"
+    else:
+        plot_values = values[:, :, 0]
+        class_note = ""
 
     fig = plt.figure()
-    shap.summary_plot(vals, sample, show=False, plot_size=(6, 4))
+    shap.summary_plot(plot_values, sample, show=False, plot_size=(6, 4))
     img = _fig_to_base64(plt.gcf())
 
-    import numpy as np
-    importance = np.abs(vals).mean(axis=0)
-    ranked = sorted(zip(X.columns, importance), key=lambda t: -t[1])
+    # Global importance: average |SHAP| over samples and classes.
+    importance = np.abs(values).mean(axis=(0, 2))
+    ranked = sorted(zip(X.columns, importance.tolist()), key=lambda t: -t[1])
     top = ranked[0][0] if ranked else "?"
     return {
         "image": img,
-        "text": f"SHAP analysis on target '{target}'. The most influential feature is "
+        "text": f"SHAP analysis on target '{target}'{class_note}. The most influential feature is "
                 f"'{top}'. Bars to the right push predictions up; bars to the left push them down.",
         "ranking": [{"feature": f, "impact": float(v)} for f, v in ranked[:10]],
     }
@@ -341,14 +420,27 @@ def _explain_gradcam(params):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    raw = params.get("image", "")
+    raw = params.get("image") or ""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("Grad-CAM needs an image. Load a PNG/JPG first.")
     if "," in raw:
         raw = raw.split(",", 1)[1]
-    if not raw:
-        raise ValueError("Grad-CAM needs an image. Load one first.")
-    img = Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGB").resize((224, 224))
+    try:
+        image_bytes = base64.b64decode(raw, validate=True)
+    except Exception as exc:
+        raise ValueError("The loaded image could not be decoded. Try a PNG or JPG.") from exc
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((224, 224))
+    except Exception as exc:
+        raise ValueError("The loaded file is not a readable image. Try a PNG or JPG.") from exc
 
-    model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT).eval()
+    try:
+        model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT).eval()
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not load the ResNet18 weights. The first Grad-CAM run downloads them; "
+            "check your internet connection and try again."
+        ) from exc
     tfm = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
@@ -362,6 +454,9 @@ def _explain_gradcam(params):
 
     out = model(x)
     cls = out.argmax(dim=1)
+    class_idx = int(cls)
+    categories = models.ResNet18_Weights.DEFAULT.meta.get("categories", [])
+    label = categories[class_idx] if 0 <= class_idx < len(categories) else f"class #{class_idx}"
     model.zero_grad()
     out[0, cls].backward()
 
@@ -374,11 +469,11 @@ def _explain_gradcam(params):
     ax.imshow(np.array(Image.fromarray((cam * 255).astype("uint8")).resize((224, 224))),
               cmap="jet", alpha=0.45)
     ax.axis("off")
-    ax.set_title(f"Grad-CAM (class #{int(cls)})")
+    ax.set_title(f"Grad-CAM: {label}")
     return {
         "image": _fig_to_base64(fig),
         "text": f"Grad-CAM heatmap. Warm (red) regions are where the model looked most "
-                f"to decide class #{int(cls)}.",
+                f"to decide '{label}'.",
     }
 
 
@@ -387,8 +482,7 @@ def _explain_gradcam(params):
 # --------------------------------------------------------------------------- #
 
 HANDLERS = {
-    "execute": execute,
-    "reset_kernel": reset_kernel,
+    "execute_code": execute_code,
     "preprocess": preprocess,
     "visualize": visualize,
     "explain": explain,

@@ -43,7 +43,14 @@ function pythonScriptPath() {
 }
 
 function startPython() {
-  const pythonBin = process.platform === "win32" ? "python" : "python3"
+  // Prefer the project's virtual environment when developing locally, then
+  // fall back to the system Python used by packaged installations.
+  const venvBin = process.platform === "win32"
+    ? path.join(__dirname, ".venv", "Scripts", "python.exe")
+    : path.join(__dirname, ".venv", "bin", "python")
+  const pythonBin = !app.isPackaged && require("node:fs").existsSync(venvBin)
+    ? venvBin
+    : (process.platform === "win32" ? "python" : "python3")
   try {
     pyProc = spawn(pythonBin, [pythonScriptPath()], {
       stdio: ["pipe", "pipe", "pipe"],
@@ -110,13 +117,16 @@ function callPython(method, params) {
     const id = ++rpcId
     pending.set(id, { resolve, reject })
     pyProc.stdin.write(JSON.stringify({ id, method, params }) + "\n")
+    // Grad-CAM may download the ResNet18 weights on its first run, so give it
+    // more time than the normal modules.
+    const timeoutMs = method === "explain" && params && params.technique === "gradcam" ? 300000 : 120000
     // Safety timeout so a hung module never freezes the UI.
     setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id)
         reject(new Error("The researcher module timed out."))
       }
-    }, 120000)
+    }, timeoutMs)
   })
 }
 
@@ -179,13 +189,6 @@ function buildMenu() {
       ],
     },
     {
-      label: "Run",
-      submenu: [
-        { label: "Run All Cells", accelerator: "CmdOrCtrl+Shift+Enter", click: send("menu:run-all") },
-        { label: "Restart Kernel", accelerator: "CmdOrCtrl+Shift+R", click: send("menu:restart") },
-      ],
-    },
-    {
       label: "Researcher",
       submenu: [
         { label: "Preprocess Dataset", click: send("menu:run", "preprocess") },
@@ -222,7 +225,7 @@ ipcMain.handle("file:open", async () => {
   const res = await dialog.showOpenDialog(mainWindow, {
     properties: ["openFile"],
     filters: [
-      { name: "Notebook / Data", extensions: ["dnb", "json", "csv", "txt", "py", "js", "md"] },
+      { name: "Notebook / Data", extensions: ["dnb", "ipynb", "json", "csv", "txt", "py", "js", "md"] },
       { name: "All Files", extensions: ["*"] },
     ],
   })
@@ -230,6 +233,38 @@ ipcMain.handle("file:open", async () => {
   const filePath = res.filePaths[0]
   const content = await fs.readFile(filePath, "utf-8")
   return { filePath, content }
+})
+
+/** Read an image as binary and return a data URI the Python sidecar can decode. */
+ipcMain.handle("file:open-image", async () => {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openFile"],
+    filters: [
+      { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  })
+  if (res.canceled || !res.filePaths[0]) return null
+  const filePath = res.filePaths[0]
+  const stat = await fs.stat(filePath)
+  if (stat.size > 20 * 1024 * 1024) {
+    throw new Error("Image is too large. Please use an image under 20 MB.")
+  }
+  const buf = await fs.readFile(filePath) // binary, not UTF-8
+  const mimeByExt = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+  }
+  const ext = path.extname(filePath).toLowerCase()
+  const mime = mimeByExt[ext] || "application/octet-stream"
+  return {
+    filePath,
+    name: path.basename(filePath),
+    dataUri: `data:${mime};base64,${buf.toString("base64")}`,
+  }
 })
 
 ipcMain.handle("file:save", async (_e, { filePath, content }) => {
@@ -250,6 +285,7 @@ ipcMain.handle("file:export", async (_e, { content, defaultName }) => {
   const res = await dialog.showSaveDialog(mainWindow, {
     defaultPath: defaultName || "export.html",
     filters: [
+      { name: "CSV", extensions: ["csv"] },
       { name: "HTML", extensions: ["html"] },
       { name: "Markdown", extensions: ["md"] },
       { name: "JSON", extensions: ["json"] },

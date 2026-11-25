@@ -6,9 +6,9 @@
     <!-- Strict CSP: only our local files run. Monaco loads from node_modules locally. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self';"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:;"
     />
-    <title>MY NOTEBOOK</title>
+    <title>Dreamy Researcher</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -21,7 +21,7 @@
             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
           </svg>
         </span>
-        <span class="brand-name">SMART&nbsp;NOTEBOOK</span>
+        <span class="brand-name">Dreamy&nbsp;Researcher</span>
       </div>
 
       <div class="toolbar">
@@ -33,7 +33,6 @@
         <button class="btn ghost" data-action="add-text" data-i18n="addText"></button>
         <button class="btn ghost" data-action="add-code" data-i18n="addCode"></button>
         <button class="btn ghost" data-action="run-all" data-i18n="runAll"></button>
-        <button class="btn ghost" data-action="restart" data-i18n="restart"></button>
       </div>
 
       <div class="topbar-right">
@@ -86,13 +85,17 @@
             <option value="lime">LIME</option>
             <option value="gradcam">Grad-CAM</option>
           </select>
+          <button class="btn block ghost" data-action="load-image" data-i18n="loadImage"></button>
+          <p id="image-info" class="muted" data-i18n="noImage"></p>
           <button class="btn block" data-run="explain" data-i18n="runExplain"></button>
         </section>
 
         <section class="module dataset">
           <h3 data-i18n="dataset"></h3>
           <p id="dataset-info" class="muted" data-i18n="noDataset"></p>
+          <p id="dataset-hint" class="muted" data-i18n="datasetHint" hidden></p>
           <button class="btn block ghost" data-action="load-data" data-i18n="loadData"></button>
+          <button class="btn block" id="save-dataset" data-action="save-dataset" data-i18n="saveData" disabled></button>
         </section>
       </aside>
 
@@ -100,6 +103,7 @@
       <section class="notebook" id="notebook" aria-label="Notebook"></section>
 
       <!-- Results panel -->
+      <div class="results-splitter" id="results-splitter" role="separator" aria-label="Resize results panel" tabindex="0"></div>
       <aside class="results" aria-label="Results">
         <h2 class="results-title" data-i18n="results"></h2>
         <div id="results-body" class="results-body">
