@@ -1,6 +1,6 @@
 {
   "name": "dreamy-researcher",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A lightweight, multilingual mini-VS Code for researchers, students, and coders — with one-click automatic ML researcher modules.",
   "main": "main.js",
   "author": "Dreamy Tech Researcher",
@@ -10,10 +10,10 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder",
-    "dist:linux": "electron-builder --linux AppImage",
-    "dist:win": "electron-builder --win nsis",
-    "dist:mac": "electron-builder --mac dmg",
+    "dist": "electron-builder --publish never",
+    "dist:linux": "electron-builder --linux AppImage --publish never",
+    "dist:win": "electron-builder --win nsis --publish never",
+    "dist:mac": "electron-builder --mac dmg --publish never",
     "web": "node web-server.js"
   },
   "dependencies": {
